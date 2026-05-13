@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Badminton Tracker – Data</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav class="navbar">
+    <span class="nav-title">🏸 Badminton Tracker <span id="sync-dot" title="offline" style="font-size:.7rem;color:#e05555">●</span></span>
+    <div class="nav-links">
+      <a href="index.html" class="nav-link">Record</a>
+      <a href="data.html" class="nav-link active">Data</a>
+    </div>
+  </nav>
+
+  <main class="data-page">
+
+    <section class="card">
+      <h2>Select Player</h2>
+      <div class="btn-group player-select-group" id="data-player-select">
+        <button class="ctx-btn" data-value="p1" data-player="p1">P1</button>
+        <button class="ctx-btn" data-value="p2" data-player="p2">P2</button>
+        <button class="ctx-btn" data-value="p3" data-player="p3">P3</button>
+        <button class="ctx-btn" data-value="p4" data-player="p4">P4</button>
+      </div>
+    </section>
+
+    <div id="data-content" style="display:none">
+
+      <!-- Serve Heatmaps -->
+      <section class="card">
+        <h2>Serves — <span id="serve-player-label"></span></h2>
+        <p class="section-hint">Where serves landed, split by which box served from. Orange = T-side · Wide-side end. Deep rows = long serves.</p>
+        <div class="heatmap-pair">
+          <div class="heatmap-block">
+            <h4>From Left Box</h4>
+            <div class="hm-grid serve-hm" id="serve-hm-left"></div>
+            <div class="hm-total" id="serve-total-left"></div>
+          </div>
+          <div class="heatmap-block">
+            <h4>From Right Box</h4>
+            <div class="hm-grid serve-hm" id="serve-hm-right"></div>
+            <div class="hm-total" id="serve-total-right"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Receive Heatmaps -->
+      <section class="card">
+        <h2>Returns — <span id="recv-player-label"></span></h2>
+        <p class="section-hint">Return locations grouped by the serve received. Straight = same side as receiver's box.</p>
+        <div class="recv-filter">
+          <div class="recv-filter-group">
+            <label>Serve type</label>
+            <div class="btn-group" id="recv-serve-type">
+              <button class="tab-btn active" data-value="all">All</button>
+              <button class="tab-btn" data-value="T">T</button>
+              <button class="tab-btn" data-value="Middle">Middle</button>
+              <button class="tab-btn" data-value="Wide">Wide</button>
+              <button class="tab-btn" data-value="TLong">T Long</button>
+              <button class="tab-btn" data-value="Drive">Drive</button>
+              <button class="tab-btn" data-value="WideLong">W. Long</button>
+            </div>
+          </div>
+          <div class="recv-filter-group">
+            <label>Box side</label>
+            <div class="btn-group" id="recv-box-side">
+              <button class="tab-btn active" data-value="all">Both</button>
+              <button class="tab-btn" data-value="left">Left</button>
+              <button class="tab-btn" data-value="right">Right</button>
+            </div>
+          </div>
+        </div>
+        <div class="hm-grid recv-hm" id="recv-hm"></div>
+        <div class="hm-total" id="recv-total"></div>
+      </section>
+
+    </div>
+
+    <div id="data-placeholder" class="placeholder-msg">Select a player above to view their stats.</div>
+
+  </main>
+
+  <script src="app.js"></script>
+  <script src="data.js"></script>
+</body>
+</html>

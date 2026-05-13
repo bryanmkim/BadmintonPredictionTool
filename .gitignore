@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Session data — contains personal rally recordings, not tracked in repo
+state.json
+sessions/
+
+# Python
+__pycache__/
+*.pyc

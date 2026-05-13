@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Badminton Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav class="navbar">
+    <span class="nav-title">🏸 Badminton Tracker <span id="sync-dot" title="offline" style="font-size:.7rem;color:#e05555">●</span></span>
+    <div class="nav-links">
+      <a href="index.html" class="nav-link active">Record</a>
+      <a href="data.html" class="nav-link">Data</a>
+    </div>
+  </nav>
+
+  <main class="record-page">
+
+    <!-- Player Names -->
+    <details class="card names-card">
+      <summary>Player Names <span class="summary-hint">(tap to edit)</span></summary>
+      <div class="player-inputs">
+        <div class="player-input-group">
+          <label>Team A · Left</label>
+          <input type="text" id="p1-name" placeholder="Player 1" />
+        </div>
+        <div class="player-input-group">
+          <label>Team A · Right</label>
+          <input type="text" id="p2-name" placeholder="Player 2" />
+        </div>
+        <div class="player-input-group">
+          <label>Team B · Left</label>
+          <input type="text" id="p3-name" placeholder="Player 3" />
+        </div>
+        <div class="player-input-group">
+          <label>Team B · Right</label>
+          <input type="text" id="p4-name" placeholder="Player 4" />
+        </div>
+      </div>
+      <button class="btn-primary" id="save-names-btn">Save Names</button>
+    </details>
+
+    <!-- Context -->
+    <section class="card context-card">
+      <div class="context-row">
+        <div class="ctx-group">
+          <label>Server</label>
+          <div class="btn-group" id="server-select">
+            <button class="ctx-btn" data-value="p1" data-player="p1">P1</button>
+            <button class="ctx-btn" data-value="p2" data-player="p2">P2</button>
+            <button class="ctx-btn" data-value="p3" data-player="p3">P3</button>
+            <button class="ctx-btn" data-value="p4" data-player="p4">P4</button>
+          </div>
+        </div>
+        <div class="ctx-group">
+          <label>Serve Box</label>
+          <div class="btn-group" id="serve-box-select">
+            <button class="ctx-btn" data-value="left">◀ Left</button>
+            <button class="ctx-btn" data-value="right">Right ▶</button>
+          </div>
+        </div>
+        <div class="ctx-group">
+          <label>Receiver</label>
+          <div class="btn-group" id="receiver-select">
+            <button class="ctx-btn" data-value="p1" data-player="p1">P1</button>
+            <button class="ctx-btn" data-value="p2" data-player="p2">P2</button>
+            <button class="ctx-btn" data-value="p3" data-player="p3">P3</button>
+            <button class="ctx-btn" data-value="p4" data-player="p4">P4</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Court -->
+    <section class="court-section">
+      <div class="court-legend">
+        <span class="leg-serve">■ Serve zones</span>
+        <span class="leg-receive">■ Return zones</span>
+      </div>
+      <div id="court-wrap" class="court-wrap"></div>
+    </section>
+
+    <!-- Rally Log -->
+    <section class="card log-card">
+      <div class="log-header">
+        <h2>Rally Log <span id="rally-count">(0)</span></h2>
+        <button class="btn-danger" id="undo-btn">Undo Last</button>
+      </div>
+      <div class="log-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Server</th><th>Box</th><th>Serve</th>
+              <th>Receiver</th><th>Box</th><th>Return</th>
+            </tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
