@@ -17,9 +17,12 @@
 
   // Pull once on load, then poll every 5 s
   pullFromServer().then(() => { if (selectedPlayer) refreshAll(); });
+  // setInterval is a built in function for repeated callback on timer.
   setInterval(async () => {
     await pullFromServer();
-    if (selectedPlayer) refreshAll();
+    if (selectedPlayer) {
+      refreshAll();
+    }
   }, 5000);
 
   // Player select

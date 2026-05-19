@@ -21,7 +21,7 @@ const SERVE_ZONES = [
 ];
 
 // Receive zones: side 0=straight, 1=middle, 2=cross  |  depth 0=net, 1=midcourt, 2=push
-// Midcourt zones use absolute=true → side 0=left, 1=center, 2=right (no flip by serveBox)
+// Midcourt zones use absolute=true → side 0=left/straight, 1=center, 2=right/cross (no flip by serveBox)
 const RECEIVE_ZONES = [
   { id: 'StraightNet',  label: 'Str\nNet',    side: 0, depth: 0 },
   { id: 'MiddleNet',    label: 'Mid\nNet',    side: 1, depth: 0 },
@@ -34,25 +34,27 @@ const RECEIVE_ZONES = [
   { id: 'CrossPush',    label: 'Cross\nPush', side: 2, depth: 2 },
 ];
 
-// Serve zone rect — serveBox 'right' → receiver in top-LEFT (bird's eye)
+// Serve zone rect — if serveBox 'right' → receiver in top-LEFT (bird's eye)(since serve is diagonal)
 // T-side (col 2) is always closest to center line CX
 function getServeRect(zone, serveBox) {
   const y = R_LONG + zone.row * SVC_ROW;
   const x = serveBox === 'right'
-    ? zone.col * COL              // col 2 → 101.7..152.5 (near CX)
-    : CX + (2 - zone.col) * COL; // col 2 → 152.5..203.3 (near CX)
+    ? zone.col * COL
+    : CX + (2 - zone.col) * COL; // Flips zones.
   return { x, y, w: COL, h: SVC_ROW };
 }
 
-// Receive zone rect — placed in server's half (bottom), split into 3 equal depth bands
+// Receive zone rect — placed in court's bottom half, split into 3 equal depth bands
 // Midcourt zones are absolute (left/center/right); net & push flip with serveBox
 function getReceiveRect(zone, serveBox) {
   const RCOL = VW / 3;
   const BAND = (S_LONG - NET_Y) / 3; // 99 units each band
   let col;
+  // if middle row.
   if (zone.absolute) {
     col = zone.side; // 0=left, 1=center, 2=right — fixed
   } else {
+  // if front or back row
     col = zone.side === 1 ? 1
       : zone.side === 0 ? (serveBox === 'right' ? 0 : 2)
       : (serveBox === 'right' ? 2 : 0);
@@ -62,9 +64,15 @@ function getReceiveRect(zone, serveBox) {
 
 // ─── Storage (localStorage cache + server sync) ──────────────────────────────
 const DEFAULT_NAMES = { p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' };
-function getNames()    { try { return JSON.parse(localStorage.getItem('bt_names'))   || {...DEFAULT_NAMES}; } catch { return {...DEFAULT_NAMES}; } }
-function getRallies()  { try { return JSON.parse(localStorage.getItem('bt_rallies')) || []; }              catch { return []; } }
+function getNames()    { 
+  try { return JSON.parse(localStorage.getItem('bt_names'))   || {...DEFAULT_NAMES}; } 
+  // if JSON.parse throws an error for corrupted string like Bryan@@
+  catch { return {...DEFAULT_NAMES}; } }
+function getRallies()  { 
+  try { return JSON.parse(localStorage.getItem('bt_rallies')) || []; } 
+  catch { return []; } }
 
+// first localStorage, then pushed to server, in case server goes offlien so user can continue until server is online.
 function saveNames(n)  { localStorage.setItem('bt_names',   JSON.stringify(n)); pushToServer(); }
 function saveRallies(r){ localStorage.setItem('bt_rallies', JSON.stringify(r)); pushToServer(); }
 
@@ -97,6 +105,7 @@ async function pullFromServer() {
   setSyncDot('syncing');
   try {
     const res  = await fetch('/api/state');
+    // when calling API data comes in stream of bytes so you must call res.json() and not JSON.parse(res)
     const data = await res.json();
     if (data.names)   localStorage.setItem('bt_names',   JSON.stringify(data.names));
     if (data.rallies) localStorage.setItem('bt_rallies', JSON.stringify(data.rallies));
@@ -110,9 +119,13 @@ const NS = 'http://www.w3.org/2000/svg';
 function svgEl(tag, attrs, parent) {
   const e = document.createElementNS(NS, tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  parent && parent.appendChild(e);
+  if (parent) {
+    // append.Child attaches child e to parent
+    parent.appendChild(e);
+  }
   return e;
 }
+// text goes in between the tags, so svgText must be separated with svgEl
 function svgText(txt, attrs, parent) {
   const e = svgEl('text', attrs, parent);
   e.textContent = txt;
@@ -189,6 +202,7 @@ function buildCourt(container, { serveBox, serverName, receiverName, onServe, on
       fill: 'rgba(255,200,140,0.95)', 'font-size':'9', 'font-family':'sans-serif',
       'font-weight':'bold', 'text-anchor':'middle', 'pointer-events':'none'
     }, g);
+    // hovering and click animation
     g.addEventListener('mouseenter', () => { rect.setAttribute('fill','rgba(247,149,79,0.45)'); });
     g.addEventListener('mouseleave', () => { rect.setAttribute('fill', pendingServe ? 'rgba(247,149,79,0.07)' : 'rgba(247,149,79,0.15)'); });
     g.addEventListener('click', () => onServe && onServe(zone.id));
@@ -225,6 +239,7 @@ function buildCourt(container, { serveBox, serverName, receiverName, onServe, on
     g.addEventListener('click', () => onReceive && onReceive(zone.id));
   });
 
+  // clears everything inside court-wrap div. Renders fresh court SVG.
   container.innerHTML = '';
   container.appendChild(svg);
 }
@@ -256,6 +271,7 @@ function initRecordPage() {
     showToast('Names saved');
   });
 
+  // refreshes name labels without needing to reload the entire page.
   function refreshLabels() {
     ['p1','p2','p3','p4'].forEach(p => {
       document.querySelectorAll(`[data-player="${p}"]`).forEach(btn => {
@@ -264,6 +280,7 @@ function initRecordPage() {
     });
   }
 
+  
   function bindGroup(groupId, key) {
     const grp = document.getElementById(groupId);
     grp.querySelectorAll('.ctx-btn').forEach(btn => {
@@ -353,6 +370,7 @@ function initRecordPage() {
   }
 }
 
+// small popup on the bottom that appears or disappears for new state or error messages.
 function showToast(msg, warn = false) {
   let t = document.getElementById('toast');
   if (!t) {
