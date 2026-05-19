@@ -14,6 +14,7 @@ A local web app for recording and analyzing badminton rally data during doubles 
 **Requirements:** Python 3
 
 ```bash
+pip install -r requirements.txt
 python3 server.py
 ```
 
