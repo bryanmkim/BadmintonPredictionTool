@@ -9,6 +9,20 @@
 <body>
   <nav class="navbar">
     <span class="nav-title">🏸 Badminton Tracker <span id="sync-dot" title="offline" style="font-size:.7rem;color:#e05555">●</span></span>
+    <div id="session-switcher" class="session-switcher">
+      <button id="session-current-btn" class="session-btn" type="button">
+        <span id="session-current-name">—</span> <span class="session-caret">▾</span>
+      </button>
+      <div id="session-menu" class="session-menu" hidden>
+        <div class="session-menu-label">Switch session</div>
+        <ul id="session-list" class="session-list"></ul>
+        <div class="session-menu-actions">
+          <button id="session-new-btn" type="button">+ New</button>
+          <button id="session-rename-btn" type="button">Rename</button>
+          <button id="session-delete-btn" type="button">Delete</button>
+        </div>
+      </div>
+    </div>
     <div class="nav-links">
       <a href="index.html" class="nav-link">Record</a>
       <a href="data.html" class="nav-link active">Data</a>

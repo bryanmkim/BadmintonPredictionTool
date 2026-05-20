@@ -62,56 +62,319 @@ function getReceiveRect(zone, serveBox) {
   return { x: col * RCOL, y: NET_Y + zone.depth * BAND, w: RCOL, h: BAND };
 }
 
-// ─── Storage (localStorage cache + server sync) ──────────────────────────────
+// ─── Storage layer (localStorage cache + per-op server sync) ────────────────
+//
+// localStorage shape:
+//   bt_sessions          → { [id]: { id, name, createdAt, names, rallies } }
+//   bt_current_session_id → string | null
+//   bt_pending_ops       → array of { type, sessionId, ... }   (offline retry queue)
+//
+// Rally-level ops (append/patch_rally/undo) are idempotent on the server, so
+// retrying them is safe. Session-level ops (create/delete/switch) require the
+// server to be online — we don't queue those.
+
 const DEFAULT_NAMES = { p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' };
-function getNames()    { 
-  try { return JSON.parse(localStorage.getItem('bt_names'))   || {...DEFAULT_NAMES}; } 
-  // if JSON.parse throws an error for corrupted string like Bryan@@
-  catch { return {...DEFAULT_NAMES}; } }
-function getRallies()  { 
-  try { return JSON.parse(localStorage.getItem('bt_rallies')) || []; } 
-  catch { return []; } }
 
-// first localStorage, then pushed to server, in case server goes offlien so user can continue until server is online.
-function saveNames(n)  { localStorage.setItem('bt_names',   JSON.stringify(n)); pushToServer(); }
-function saveRallies(r){ localStorage.setItem('bt_rallies', JSON.stringify(r)); pushToServer(); }
+function lsGet(key, fallback) {
+  try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
+  catch { return fallback; }
+}
+function lsSet(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
 
-// Server Status Dot Handler
+function getSessions()          { return lsGet('bt_sessions', {}); }
+function saveSessions(sessions) { lsSet('bt_sessions', sessions); }
+function getCurrentSessionId()  { return lsGet('bt_current_session_id', null); }
+function setCurrentSessionIdLocal(id) { lsSet('bt_current_session_id', id); }
+function getPendingOps()        { return lsGet('bt_pending_ops', []); }
+function setPendingOps(ops)     { lsSet('bt_pending_ops', ops); }
+
+function getActiveSession() {
+  const id = getCurrentSessionId();
+  if (!id) return null;
+  return getSessions()[id] || null;
+}
+
+// Back-compat shims used by data.js and the record-page renderLog.
+function getNames()   { const s = getActiveSession(); return s ? { ...DEFAULT_NAMES, ...s.names } : { ...DEFAULT_NAMES }; }
+function getRallies() { const s = getActiveSession(); return s ? s.rallies.slice() : []; }
+
+// ─── Sync dot ───────────────────────────────────────────────────────────────
 function setSyncDot(state) {
   const dot = document.getElementById('sync-dot');
   if (!dot) return;
-  // Map in JS is just a dictionary.s
   const map = { synced:'#4caf50', syncing:'#f7954f', offline:'#e05555' };
   dot.style.color = map[state] || map.offline;
   dot.title = state;
 }
 
-// Sends POST call to /api/state == server.py with all the rally data
-async function pushToServer() {
-  setSyncDot('syncing');
-  try {
-    await fetch('/api/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ names: getNames(), rallies: getRallies() })
-    });
-    // no error; sets status dot to green.
-    setSyncDot('synced');
-    // if API call throws an error(server error or server offline, sets status dot to red.)
-  } catch { setSyncDot('offline'); }
+// ─── Low-level fetch helper ─────────────────────────────────────────────────
+async function apiFetch(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
+  if (res.status === 204) return null;
+  return res.json();
 }
 
-async function pullFromServer() {
+// ─── API wrappers ───────────────────────────────────────────────────────────
+const api = {
+  listSessions:   ()                          => apiFetch('GET',    '/api/sessions'),
+  getSession:     (id)                        => apiFetch('GET',    `/api/sessions/${id}`),
+  createSession:  (body)                      => apiFetch('POST',   '/api/sessions', body),
+  patchSession:   (id, body)                  => apiFetch('PATCH',  `/api/sessions/${id}`, body),
+  deleteSession:  (id)                        => apiFetch('DELETE', `/api/sessions/${id}`),
+  setCurrent:     (id)                        => apiFetch('PUT',    '/api/current-session', { id }),
+  appendRally:    (id, rally)                 => apiFetch('POST',   `/api/sessions/${id}/rallies`, rally),
+  patchRally:     (sid, rid, partial)         => apiFetch('PATCH',  `/api/sessions/${sid}/rallies/${rid}`, partial),
+  deleteRally:    (sid, rid)                  => apiFetch('DELETE', `/api/sessions/${sid}/rallies/${rid}`),
+};
+
+// ─── Op queue (offline retry for rally-level ops) ───────────────────────────
+async function applyOp(op) {
+  switch (op.type) {
+    case 'append_rally':  return api.appendRally(op.sessionId, op.rally);
+    case 'patch_rally':   return api.patchRally(op.sessionId, op.rallyId, op.partial);
+    case 'delete_rally':  return api.deleteRally(op.sessionId, op.rallyId);
+    case 'patch_session': return api.patchSession(op.sessionId, op.partial);
+    default: throw new Error(`unknown op ${op.type}`);
+  }
+}
+
+async function flushOps() {
+  let queue = getPendingOps();
+  while (queue.length) {
+    try { await applyOp(queue[0]); }
+    catch { return false; }
+    queue = queue.slice(1);
+    setPendingOps(queue);
+  }
+  return true;
+}
+
+async function syncOp(op) {
+  setSyncDot('syncing');
+  const flushed = await flushOps();
+  if (!flushed) {
+    setPendingOps([...getPendingOps(), op]);
+    setSyncDot('offline');
+    return;
+  }
+  try {
+    await applyOp(op);
+    setSyncDot('synced');
+  } catch {
+    setPendingOps([...getPendingOps(), op]);
+    setSyncDot('offline');
+  }
+}
+
+// ─── Local + remote mutators ────────────────────────────────────────────────
+function mutateActiveSession(fn) {
+  const id = getCurrentSessionId();
+  if (!id) return null;
+  const sessions = getSessions();
+  if (!sessions[id]) return null;
+  const result = fn(sessions[id]);
+  saveSessions(sessions);
+  return result;
+}
+
+function appendRallyLocal(rally) {
+  const sid = getCurrentSessionId();
+  mutateActiveSession(s => s.rallies.push(rally));
+  syncOp({ type: 'append_rally', sessionId: sid, rally });
+}
+
+function patchRallyLocal(rallyId, partial) {
+  const sid = getCurrentSessionId();
+  mutateActiveSession(s => {
+    const t = s.rallies.find(r => r.id === rallyId);
+    if (t) Object.assign(t, partial);
+  });
+  syncOp({ type: 'patch_rally', sessionId: sid, rallyId, partial });
+}
+
+function undoLastLocal() {
+  const sid = getCurrentSessionId();
+  let removed = null;
+  mutateActiveSession(s => { removed = s.rallies.pop() || null; });
+  if (removed) syncOp({ type: 'delete_rally', sessionId: sid, rallyId: removed.id });
+  return removed;
+}
+
+function saveNames(names) {
+  const sid = getCurrentSessionId();
+  mutateActiveSession(s => { s.names = { ...s.names, ...names }; });
+  syncOp({ type: 'patch_session', sessionId: sid, partial: { names } });
+}
+
+// ─── Bootstrap: pull from server, seed if empty ─────────────────────────────
+async function bootstrapState() {
   setSyncDot('syncing');
   try {
-    const res  = await fetch('/api/state');
-    // when calling API data comes in stream of bytes so you must call res.json() and not JSON.parse(res)
-    const data = await res.json();
-    if (data.names)   localStorage.setItem('bt_names',   JSON.stringify(data.names));
-    if (data.rallies) localStorage.setItem('bt_rallies', JSON.stringify(data.rallies));
-    setSyncDot('synced');
+    const flushed = await flushOps();
+    const list = await api.listSessions();
+    let currentId = list.currentSessionId;
+
+    // No sessions at all → create a default one and adopt it.
+    if (!currentId && list.sessions.length === 0) {
+      const seed = await api.createSession({ name: 'Session 1', names: DEFAULT_NAMES });
+      currentId = seed.id;
+      list.sessions = [{ id: seed.id, name: seed.name, createdAt: seed.createdAt }];
+    } else if (!currentId) {
+      // Server has sessions but none marked current — pick the newest.
+      currentId = list.sessions[0].id;
+      await api.setCurrent(currentId);
+    }
+
+    // Pull the current session in full and cache it.
+    const full = await api.getSession(currentId);
+    const sessions = {};
+    for (const meta of list.sessions) {
+      sessions[meta.id] = meta.id === currentId
+        ? full
+        : { ...meta, names: { ...DEFAULT_NAMES }, rallies: [] }; // lazy: rallies fetched on switch
+    }
+    saveSessions(sessions);
+    setCurrentSessionIdLocal(currentId);
+    setSyncDot(flushed ? 'synced' : 'offline');
     return true;
-  } catch { setSyncDot('offline'); return false; }
+  } catch {
+    setSyncDot('offline');
+    return false;
+  }
+}
+
+// data.js still calls this; preserve the name.
+async function pullFromServer() { return bootstrapState(); }
+
+// ─── Session lifecycle (online-only) ────────────────────────────────────────
+async function uiCreateSession() {
+  const name = prompt('Session name?');
+  if (!name) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  try {
+    setSyncDot('syncing');
+    const session = await api.createSession({ name: trimmed, names: DEFAULT_NAMES });
+    await api.setCurrent(session.id);
+    const sessions = getSessions();
+    sessions[session.id] = session;
+    saveSessions(sessions);
+    setCurrentSessionIdLocal(session.id);
+    location.reload();
+  } catch {
+    setSyncDot('offline');
+    showToast('Offline — cannot create session', true);
+  }
+}
+
+async function uiRenameSession() {
+  const id = getCurrentSessionId();
+  const cur = getActiveSession();
+  if (!cur) return;
+  const name = prompt('Rename session:', cur.name);
+  if (!name || name.trim() === cur.name) return;
+  try {
+    setSyncDot('syncing');
+    await api.patchSession(id, { name: name.trim() });
+    mutateActiveSession(s => { s.name = name.trim(); });
+    setSyncDot('synced');
+    renderSessionSwitcher();
+  } catch {
+    setSyncDot('offline');
+    showToast('Offline — cannot rename', true);
+  }
+}
+
+async function uiDeleteSession() {
+  const id = getCurrentSessionId();
+  const cur = getActiveSession();
+  if (!cur) return;
+  const sessions = getSessions();
+  if (Object.keys(sessions).length <= 1) {
+    showToast('Cannot delete the only session', true);
+    return;
+  }
+  if (!confirm(`Delete session "${cur.name}"? This removes all its rallies.`)) return;
+  try {
+    setSyncDot('syncing');
+    const res = await api.deleteSession(id);
+    delete sessions[id];
+    saveSessions(sessions);
+    setCurrentSessionIdLocal(res.currentSessionId);
+    location.reload();
+  } catch {
+    setSyncDot('offline');
+    showToast('Offline — cannot delete', true);
+  }
+}
+
+async function uiSwitchSession(targetId) {
+  if (targetId === getCurrentSessionId()) return;
+  try {
+    setSyncDot('syncing');
+    await api.setCurrent(targetId);
+    const full = await api.getSession(targetId);
+    const sessions = getSessions();
+    sessions[targetId] = full;
+    saveSessions(sessions);
+    setCurrentSessionIdLocal(targetId);
+    location.reload();
+  } catch {
+    setSyncDot('offline');
+    showToast('Offline — cannot switch sessions', true);
+  }
+}
+
+// ─── Session switcher UI (navbar dropdown) ──────────────────────────────────
+function renderSessionSwitcher() {
+  const root = document.getElementById('session-switcher');
+  if (!root) return;
+  const cur = getActiveSession();
+  const sessions = Object.values(getSessions()).sort((a, b) => b.createdAt - a.createdAt);
+
+  const nameBtn = document.getElementById('session-current-name');
+  if (nameBtn) nameBtn.textContent = cur ? cur.name : '—';
+
+  const list = document.getElementById('session-list');
+  if (list) {
+    list.innerHTML = sessions.map(s => {
+      const d = new Date(s.createdAt);
+      const label = `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const active = s.id === (cur && cur.id) ? ' active' : '';
+      return `<li class="session-item${active}" data-id="${s.id}">
+                <span class="session-name">${escapeHtml(s.name)}</span>
+                <span class="session-date">${label}</span>
+              </li>`;
+    }).join('');
+    list.querySelectorAll('.session-item').forEach(li => {
+      li.addEventListener('click', () => uiSwitchSession(li.dataset.id));
+    });
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+function initSessionSwitcher() {
+  const root = document.getElementById('session-switcher');
+  if (!root) return;
+  const currentBtn = document.getElementById('session-current-btn');
+  const menu = document.getElementById('session-menu');
+  currentBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+  });
+  document.addEventListener('click', (e) => {
+    if (!root.contains(e.target)) menu.hidden = true;
+  });
+  document.getElementById('session-new-btn').addEventListener('click', uiCreateSession);
+  document.getElementById('session-rename-btn').addEventListener('click', uiRenameSession);
+  document.getElementById('session-delete-btn').addEventListener('click', uiDeleteSession);
+  renderSessionSwitcher();
 }
 
 // ─── SVG helpers ────────────────────────────────────────────────────────────
@@ -119,13 +382,9 @@ const NS = 'http://www.w3.org/2000/svg';
 function svgEl(tag, attrs, parent) {
   const e = document.createElementNS(NS, tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  if (parent) {
-    // append.Child attaches child e to parent
-    parent.appendChild(e);
-  }
+  if (parent) parent.appendChild(e);
   return e;
 }
-// text goes in between the tags, so svgText must be separated with svgEl
 function svgText(txt, attrs, parent) {
   const e = svgEl('text', attrs, parent);
   e.textContent = txt;
@@ -202,7 +461,6 @@ function buildCourt(container, { serveBox, serverName, receiverName, onServe, on
       fill: 'rgba(255,200,140,0.95)', 'font-size':'9', 'font-family':'sans-serif',
       'font-weight':'bold', 'text-anchor':'middle', 'pointer-events':'none'
     }, g);
-    // hovering and click animation
     g.addEventListener('mouseenter', () => { rect.setAttribute('fill','rgba(247,149,79,0.45)'); });
     g.addEventListener('mouseleave', () => { rect.setAttribute('fill', pendingServe ? 'rgba(247,149,79,0.07)' : 'rgba(247,149,79,0.15)'); });
     g.addEventListener('click', () => onServe && onServe(zone.id));
@@ -239,19 +497,19 @@ function buildCourt(container, { serveBox, serverName, receiverName, onServe, on
     g.addEventListener('click', () => onReceive && onReceive(zone.id));
   });
 
-  // clears everything inside court-wrap div. Renders fresh court SVG.
   container.innerHTML = '';
   container.appendChild(svg);
 }
 
-// ─── Record page init ────────────────────────────────────────────────────────
-if (document.getElementById('court-wrap')) {
-  pullFromServer().then(() => initRecordPage());
-}
+// ─── Page bootstrapping ─────────────────────────────────────────────────────
+bootstrapState().then(() => {
+  initSessionSwitcher();
+  if (document.getElementById('court-wrap')) initRecordPage();
+});
 
+// ─── Record page ────────────────────────────────────────────────────────────
 function initRecordPage() {
-  const names   = getNames();
-  const rallies = getRallies();
+  const names = getNames();
   const ctx = { server: null, serveBox: null, receiver: null };
 
   // Player name inputs
@@ -261,26 +519,28 @@ function initRecordPage() {
   });
 
   document.getElementById('save-names-btn').addEventListener('click', () => {
+    const next = {};
     ['p1','p2','p3','p4'].forEach(p => {
       const v = document.getElementById(`${p}-name`).value.trim();
-      names[p] = v || DEFAULT_NAMES[p];
+      next[p] = v || DEFAULT_NAMES[p];
     });
-    saveNames(names);
+    saveNames(next);
+    Object.assign(names, next);
     refreshLabels();
     refreshCourt();
     showToast('Names saved');
   });
 
-  // refreshes name labels without needing to reload the entire page.
   function refreshLabels() {
+    const fresh = getNames();
+    Object.assign(names, fresh);
     ['p1','p2','p3','p4'].forEach(p => {
       document.querySelectorAll(`[data-player="${p}"]`).forEach(btn => {
-        btn.textContent = names[p];
+        btn.textContent = fresh[p];
       });
     });
   }
 
-  
   function bindGroup(groupId, key) {
     const grp = document.getElementById(groupId);
     grp.querySelectorAll('.ctx-btn').forEach(btn => {
@@ -309,36 +569,36 @@ function initRecordPage() {
       pendingServe: false,
       onServe(shotId) {
         if (!ctx.server || !ctx.serveBox) return;
-        rallies.push({
+        appendRallyLocal({
           id: Date.now(),
           server: ctx.server, serveBox: ctx.serveBox, serve: shotId,
           receiver: ctx.receiver || null,
-          receiveBox: ctx.serveBox,   // always same as serveBox
+          receiveBox: ctx.serveBox,
           receive: null
         });
-        saveRallies(rallies);
         renderLog();
         showToast(`Serve: ${shotId}`);
       },
       onReceive(shotId) {
         if (!ctx.receiver) { showToast('Select receiver first', true); return; }
         // Link to most recent unresolved rally for this receiver
-        let linked = false;
+        const rallies = getRallies();
+        let linkedId = null;
         for (let i = rallies.length - 1; i >= 0; i--) {
           if (rallies[i].receiver === ctx.receiver && rallies[i].receive === null) {
-            rallies[i].receive = shotId;
-            linked = true; break;
+            linkedId = rallies[i].id; break;
           }
         }
-        if (!linked) {
-          rallies.push({
+        if (linkedId !== null) {
+          patchRallyLocal(linkedId, { receive: shotId });
+        } else {
+          appendRallyLocal({
             id: Date.now(),
             server: null, serveBox: null, serve: null,
             receiver: ctx.receiver, receiveBox: ctx.serveBox,
             receive: shotId
           });
         }
-        saveRallies(rallies);
         renderLog();
         showToast(`Return: ${shotId}`);
       }
@@ -346,16 +606,15 @@ function initRecordPage() {
   }
 
   document.getElementById('undo-btn').addEventListener('click', () => {
-    if (!rallies.length) return;
-    rallies.pop();
-    saveRallies(rallies);
-    renderLog();
+    const removed = undoLastLocal();
+    if (removed) renderLog();
   });
 
   function renderLog() {
     const tbody = document.getElementById('log-body');
     const count = document.getElementById('rally-count');
     if (!tbody) return;
+    const rallies = getRallies();
     count.textContent = `(${rallies.length})`;
     tbody.innerHTML = rallies.slice().reverse().map((r, i) => `
       <tr>
@@ -370,7 +629,7 @@ function initRecordPage() {
   }
 }
 
-// small popup on the bottom that appears or disappears for new state or error messages.
+// ─── Toast ──────────────────────────────────────────────────────────────────
 function showToast(msg, warn = false) {
   let t = document.getElementById('toast');
   if (!t) {

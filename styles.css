@@ -17,12 +17,52 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
 .navbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 13px 20px; background: var(--surface); border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 100;
+  position: sticky; top: 0; z-index: 100; gap: 12px;
 }
 .nav-title { font-size: 1.1rem; font-weight: 700; letter-spacing: .3px; }
 .nav-links  { display: flex; gap: 6px; }
 .nav-link   { text-decoration: none; padding: 5px 16px; border-radius: 20px; font-size: .88rem; color: var(--muted); transition: all .15s; }
 .nav-link.active, .nav-link:hover { background: var(--accent); color: #fff; }
+
+/* ── Session switcher ── */
+.session-switcher { position: relative; flex: 0 1 auto; }
+.session-btn {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 6px 12px; font-size: .85rem; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+}
+.session-btn:hover { border-color: var(--accent); }
+.session-btn #session-current-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
+.session-caret { color: var(--muted); font-size: .7rem; }
+.session-menu {
+  position: absolute; top: calc(100% + 6px); left: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  min-width: 260px; max-width: 340px; padding: 8px; z-index: 110;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.session-menu[hidden] { display: none; }
+.session-menu-label { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; padding: 4px 8px 6px; }
+.session-list { list-style: none; max-height: 240px; overflow-y: auto; margin-bottom: 6px; }
+.session-item {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 7px 9px; border-radius: 5px; cursor: pointer; transition: background .12s;
+}
+.session-item:hover { background: var(--surface2); }
+.session-item.active { background: var(--surface2); border: 1px solid var(--accent); }
+.session-name { font-size: .88rem; font-weight: 600; color: var(--text); }
+.session-date { font-size: .7rem; color: var(--muted); }
+.session-menu-actions { display: flex; gap: 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+.session-menu-actions button {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 5px; padding: 6px 8px; font-size: .78rem; cursor: pointer; transition: all .12s;
+}
+.session-menu-actions button:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 620px) {
+  .navbar { flex-wrap: wrap; }
+  .session-switcher { order: 3; width: 100%; }
+  .session-btn { width: 100%; max-width: none; justify-content: space-between; }
+  .session-menu { left: 0; right: 0; max-width: none; }
+}
 
 /* ── Cards ── */
 .card {
