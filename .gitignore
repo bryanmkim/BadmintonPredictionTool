@@ -5,7 +5,11 @@
 state.json
 sessions/
 
+# Local environment/secrets
+.env
+
 # Python
+.venv/
 __pycache__/
 *.pyc
 

@@ -6,10 +6,9 @@ Run: python server.py
 """
 
 import os
-import json
 import socket
 import threading
-import time
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -18,12 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
-PORT       = 8000
-STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE  = os.path.join(STATIC_DIR, 'state.json')
-lock       = threading.Lock()
+from storage import DEFAULT_NAMES, _new_session, init_db, load_state, save_state, storage_backend
 
-DEFAULT_NAMES = {'p1': 'P1', 'p2': 'P2', 'p3': 'P3', 'p4': 'P4'}
+PORT       = 8000
+ROOT_DIR   = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(ROOT_DIR, 'static')
+lock       = threading.Lock()
 
 
 # ─── Pydantic models ────────────────────────────────────────────────────────
@@ -75,56 +74,6 @@ class SetCurrentBody(BaseModel):
     id: str
 
 
-# ─── State persistence ──────────────────────────────────────────────────────
-
-def _new_session(name: str, names: Optional[dict] = None, created_at: Optional[int] = None) -> dict:
-    ts = created_at if created_at is not None else int(time.time() * 1000)
-    return {
-        'id': f's_{ts}',
-        'name': name,
-        'createdAt': ts,
-        'names': {**DEFAULT_NAMES, **(names or {})},
-        'rallies': [],
-    }
-
-
-def _empty_state() -> dict:
-    return {'currentSessionId': None, 'sessions': {}}
-
-
-def _migrate_if_needed(data: dict) -> dict:
-    """Wrap legacy {names, rallies} shape into a single session."""
-    if 'sessions' in data and 'currentSessionId' in data:
-        return data
-    if 'names' in data and 'rallies' in data:
-        try:
-            mtime_ms = int(os.path.getmtime(DATA_FILE) * 1000)
-        except OSError:
-            mtime_ms = int(time.time() * 1000)
-        session = _new_session('Session 1', data.get('names'), created_at=mtime_ms)
-        session['rallies'] = data.get('rallies', [])
-        return {'currentSessionId': session['id'], 'sessions': {session['id']: session}}
-    return _empty_state()
-
-
-def load_state() -> dict:
-    if not os.path.exists(DATA_FILE):
-        return _empty_state()
-    with open(DATA_FILE, 'r') as f:
-        raw = json.load(f)
-    migrated = _migrate_if_needed(raw)
-    if migrated is not raw:
-        # Persist the migrated shape on first read so the on-disk file is fresh.
-        with open(DATA_FILE, 'w') as f:
-            json.dump(migrated, f, indent=2)
-    return migrated
-
-
-def save_state(data: dict) -> None:
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-
 def _get_session_or_404(state: dict, session_id: str) -> dict:
     session = state['sessions'].get(session_id)
     if session is None:
@@ -145,7 +94,13 @@ def local_ip() -> str:
 
 # ─── App setup ──────────────────────────────────────────────────────────────
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -280,6 +235,7 @@ app.mount('/', StaticFiles(directory=STATIC_DIR, html=True), name='static')
 if __name__ == '__main__':
     ip = local_ip()
     print(f'  Badminton Tracker running')
+    print(f'  Storage: {storage_backend()}')
     print(f'  Local:   http://localhost:{PORT}')
     print(f'  Network: http://{ip}:{PORT}')
     print(f'  Ctrl+C to stop')
