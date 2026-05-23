@@ -12,6 +12,3 @@ sessions/
 .venv/
 __pycache__/
 *.pyc
-
-# Claude Code local settings/plans
-.claude/
